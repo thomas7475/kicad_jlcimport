@@ -18,5 +18,6 @@ class JLCImportPlugin(pcbnew.ActionPlugin):
         board = pcbnew.GetBoard()
         kicad_version = detect_kicad_version_from_pcbnew()
         dlg = JLCImportDialog(None, board, kicad_version=kicad_version)
-        dlg.ShowModal()
-        dlg.Destroy()
+        dlg.Show()
+        # Do not call Destroy() here — the frame owns its own lifetime
+        # and will call Destroy() itself when the user closes it.

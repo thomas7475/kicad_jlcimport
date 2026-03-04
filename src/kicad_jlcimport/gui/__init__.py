@@ -86,5 +86,6 @@ Examples:
 
     # Create and show main dialog
     main_dlg = JLCImportDialog(None, board=None, project_dir=project_dir)
-    main_dlg.ShowModal()
-    main_dlg.Destroy()
+    app.SetTopWindow(main_dlg)
+    main_dlg.Show()
+    app.MainLoop()

@@ -354,9 +354,9 @@ class _SpinnerOverlay(wx.Window):
             dc.DrawLine(int(x1), int(y1), int(x2), int(y2))
 
 
-class JLCImportDialog(wx.Dialog):
+class JLCImportDialog(wx.Frame):
     def __init__(self, parent, board, project_dir=None, kicad_version=None, global_lib_dir=""):
-        super().__init__(parent, title="JLCImport", size=(700, 640), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        super().__init__(parent, title="JLCImport", size=(700, 640), style=wx.DEFAULT_FRAME_STYLE | wx.FRAME_FLOAT_ON_PARENT)
         self.board = board
         self._project_dir = project_dir  # Used when board is None (standalone mode)
         self._kicad_version = kicad_version or DEFAULT_KICAD_VERSION
@@ -665,9 +665,38 @@ class JLCImportDialog(wx.Dialog):
         # Escape key to close gallery
         self.Bind(wx.EVT_CHAR_HOOK, self._on_key)
 
+        # Destroy the frame when the user closes it (non-modal)
+        self.Bind(wx.EVT_CLOSE, self._on_close)
+
         # Spinner overlays (children of the main panel, transparent background)
         self._busy_overlay = _SpinnerOverlay(panel)
         self._search_overlay = _SpinnerOverlay(panel, target=self.results_list)
+
+    def _on_close(self, event):
+        """Destroy the frame when the user closes it."""
+        self.Destroy()
+
+    def ShowModal(self):
+        """Compatibility shim: show as non-modal and run a local event loop.
+
+        Called by the standalone GUI entry points (gui_entry.py, gui/__init__.py)
+        which still use ShowModal()/Destroy().  Inside KiCad the plugin now calls
+        Show() directly so this path is not exercised there.
+        """
+        self.Show()
+        # Run a local event loop so the caller blocks until the frame is closed,
+        # matching the original modal behaviour for the standalone GUI.
+        self._modal_loop = wx.GUIEventLoop()
+        self.Bind(wx.EVT_CLOSE, self._on_modal_close)
+        wx.GUIEventLoop.SetActive(self._modal_loop)
+        self._modal_loop.Run()
+        return wx.ID_OK
+
+    def _on_modal_close(self, event):
+        """Stop the local event loop when running in pseudo-modal mode."""
+        if hasattr(self, "_modal_loop"):
+            self._modal_loop.Exit()
+        self.Destroy()
 
     def _get_project_dir(self) -> str:
         if self.board:

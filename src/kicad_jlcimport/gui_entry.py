@@ -119,8 +119,9 @@ Examples:
     main_dlg = JLCImportDialog(
         None, board=None, project_dir=project_dir, kicad_version=args.kicad_version, global_lib_dir=global_lib_dir
     )
-    main_dlg.ShowModal()
-    main_dlg.Destroy()
+    app.SetTopWindow(main_dlg)
+    main_dlg.Show()
+    app.MainLoop()
 
 
 if __name__ == "__main__":
