@@ -9,6 +9,13 @@ from ._format import fmt_float as _fmt
 from ._format import gen_uuid as _uuid
 from .version import DEFAULT_KICAD_VERSION, footprint_format_version, has_embedded_fonts, has_generator_version
 
+# --- SNAP TO GRID (placement only) ---
+SNAP_GRID = 0.005
+
+def _snap(v: float) -> float:
+    return round(v / SNAP_GRID) * SNAP_GRID
+# ----------------------------------
+
 
 def write_footprint(
     footprint: EEFootprint,
@@ -81,6 +88,11 @@ def write_footprint(
         for i in range(len(track.points) - 1):
             x1, y1 = track.points[i]
             x2, y2 = track.points[i + 1]
+
+            # SNAP placement only
+            x1, y1 = _snap(x1), _snap(y1)
+            x2, y2 = _snap(x2), _snap(y2)
+
             lines.append(
                 f"  (fp_line (start {_fmt(x1)} {_fmt(y1)}) (end {_fmt(x2)} {_fmt(y2)})"
                 f" (stroke (width {_fmt(track.width)}) (type solid))"
@@ -89,11 +101,14 @@ def write_footprint(
 
     # Circles
     for circle in footprint.circles:
-        end_x = circle.cx + circle.radius
+        cx = _snap(circle.cx)
+        cy = _snap(circle.cy)
+        end_x = cx + circle.radius  # do NOT snap radius
+
         fill_str = " (fill solid)" if circle.filled else ""
         lines.append(
-            f"  (fp_circle (center {_fmt(circle.cx)} {_fmt(circle.cy)})"
-            f" (end {_fmt(end_x)} {_fmt(circle.cy)})"
+            f"  (fp_circle (center {_fmt(cx)} {_fmt(cy)})"
+            f" (end {_fmt(end_x)} {_fmt(cy)})"
             f" (stroke (width {_fmt(circle.width)}) (type solid))"
             f"{fill_str}"
             f' (layer "{circle.layer}") (uuid "{_uuid()}"))'
@@ -102,11 +117,18 @@ def write_footprint(
     # Arcs
     for arc in footprint.arcs:
         mid = compute_arc_midpoint(arc.start, arc.end, arc.rx, arc.ry, arc.large_arc, arc.sweep)
-        # If sweep == 0, swap start and end
+
+        # SNAP placement only
+        mid = (_snap(mid[0]), _snap(mid[1]))
+
         if arc.sweep == 0:
             s, e = arc.end, arc.start
         else:
             s, e = arc.start, arc.end
+
+        s = (_snap(s[0]), _snap(s[1]))
+        e = (_snap(e[0]), _snap(e[1]))
+
         lines.append(
             f"  (fp_arc (start {_fmt(s[0])} {_fmt(s[1])})"
             f" (mid {_fmt(mid[0])} {_fmt(mid[1])})"
@@ -117,6 +139,7 @@ def write_footprint(
 
     # Solid regions (e.g., pin 1 indicators, courtyard outlines)
     for region in footprint.regions:
+        # DO NOT snap polygon internals
         pts_str = " ".join(f"(xy {_fmt(x)} {_fmt(y)})" for x, y in region.points)
         if region.layer in ("F.CrtYd", "B.CrtYd"):
             # Courtyard must be an unfilled outline, not a filled polygon
@@ -137,7 +160,12 @@ def write_footprint(
     # Pads
     for pad in footprint.pads:
         pad_type, pad_shape, layers = _pad_type_info(pad)
-        at_str = f"(at {_fmt(pad.x)} {_fmt(pad.y)}"
+
+        # SNAP placement only
+        px = _snap(pad.x)
+        py = _snap(pad.y)
+
+        at_str = f"(at {_fmt(px)} {_fmt(py)}"
         if pad.rotation != 0:
             at_str += f" {_fmt(pad.rotation)}"
         at_str += ")"
@@ -146,15 +174,10 @@ def write_footprint(
         layers_str = " ".join(f'"{layer}"' for layer in layers)
 
         if pad_shape == "custom" and pad.polygon_points:
-            # Custom pad with polygon primitives.  The polygon vertices
-            # already define the final shape, so omit pad rotation to
-            # avoid double-rotating.
-            custom_at = f"(at {_fmt(pad.x)} {_fmt(pad.y)})"
+            custom_at = f"(at {_fmt(px)} {_fmt(py)})"
             pts = pad.polygon_points
             pts_str = " ".join(f"(xy {_fmt(pts[i])} {_fmt(pts[i + 1])})" for i in range(0, len(pts) - 1, 2))
-            # Use a minimal anchor size — the actual shape is defined
-            # entirely by the gr_poly primitive.  A large anchor would fill
-            # in the castellated notches of the custom polygon.
+
             lines.append(f'  (pad "{pad.number}" {pad_type} {pad_shape} {custom_at} (size 0.1 0.1)')
             if pad.drill > 0:
                 lines.append(f"    {_drill_str(pad)}")
@@ -173,8 +196,11 @@ def write_footprint(
     # Holes (NPTH)
     for hole in footprint.holes:
         diameter = hole.radius * 2
+        hx = _snap(hole.x)
+        hy = _snap(hole.y)
+
         lines.append(
-            f'  (pad "" np_thru_hole circle (at {_fmt(hole.x)} {_fmt(hole.y)})'
+            f'  (pad "" np_thru_hole circle (at {_fmt(hx)} {_fmt(hy)})'
             f" (size {_fmt(diameter)} {_fmt(diameter)})"
             f" (drill {_fmt(diameter)})"
             f' (layers "*.Cu" "*.Mask") (uuid "{_uuid()}"))'
@@ -206,17 +232,14 @@ def _drill_str(pad) -> str:
     """
     if pad.slot_length > 0:
         if pad.height >= pad.width:
-            # Vertical slot: narrow dimension = drill, long dimension = slot_length
             return f"(drill oval {_fmt(pad.drill)} {_fmt(pad.slot_length)})"
         else:
-            # Horizontal slot: long dimension = slot_length, narrow dimension = drill
             return f"(drill oval {_fmt(pad.slot_length)} {_fmt(pad.drill)})"
     return f"(drill {_fmt(pad.drill)})"
 
 
 def _pad_type_info(pad):
     """Determine pad type, shape, and layers."""
-    # Shape mapping
     shape_map = {
         "RECT": "rect",
         "OVAL": "oval",
@@ -225,15 +248,12 @@ def _pad_type_info(pad):
     }
     pad_shape = shape_map.get(pad.shape, "rect")
 
-    # Only use custom shape if polygon data is available; fall back to rect
     if pad_shape == "custom" and not pad.polygon_points:
         pad_shape = "rect"
 
     if pad.layer == "11":
-        # Through-hole
         pad_type = "thru_hole"
         layers = ["*.Cu", "*.Mask"]
-        # First pad is often rect for THT
         if pad.number == "1" and pad_shape == "rect":
             pad_shape = "rect"
     elif pad.layer == "2":
